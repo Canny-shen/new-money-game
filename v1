@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>理財小富翁（動物版）— 20 檔股票 + 地產升級 + 事件卡強化</title>
+<title>理財小富翁（動物版）— 20 檔股票 + 地產升級 + 資產淨值排名</title>
 <style>
   :root{
     --primary:#5d9cec; --panel:#ffffff; --bg:#f0f8ff; --ink:#0f172a; --muted:#64748b;
@@ -97,6 +97,7 @@
         <div class="chip good">總收入：<span id="income">0</span></div>
         <div class="chip bad">總支出：<span id="expense">0</span></div>
         <div class="chip">現金餘額：<strong id="balance">0</strong></div>
+        <div class="chip">資產淨值(含地產)：<strong id="networth">0</strong></div>
         <div class="chip">股票：<strong id="stockSummary">—</strong></div>
       </div>
 
@@ -146,7 +147,7 @@
       </details>
 
       <details>
-        <summary>📊 排行（全體）</summary>
+        <summary>📊 排行（全體，以資產淨值排序）</summary>
         <ol id="leaderboard" style="text-align:left"></ol>
       </details>
     </div>
@@ -201,6 +202,7 @@ addEventListener('DOMContentLoaded', () => {
   const incomeEl=$('income');
   const expenseEl=$('expense');
   const balanceEl=$('balance');
+  const networthEl=$('networth');
   const stockSummaryEl=$('stockSummary');
 
   const diceEl=$('dice');
@@ -246,13 +248,13 @@ addEventListener('DOMContentLoaded', () => {
       {symbol:'KOAL', name:'無尾熊'}, {symbol:'SLOV', name:'樹懶'}, {symbol:'MICE', name:'小鼠'},
       {symbol:'HORS', name:'駿馬'}, {symbol:'ZEBR', name:'斑馬'}
     ],
-    price: {},                 // 實時價格表
+    price: {},
     init(){
-      this.list.forEach((s,i)=>{ // 初始價：介於 60~300，不同基準
+      this.list.forEach((s,i)=>{ // 初始價：60~300
         this.price[s.symbol] = 60 + Math.round((i+1)* (240/this.list.length)) + Math.floor(Math.random()*20);
       });
     },
-    tickAll(){ // 市場隨機微幅波動（-10% ~ +10%）
+    tickAll(){ // 全市場每回合波動（-10% ~ +10%）
       for(const s of this.list){
         const p=this.price[s.symbol];
         const pct=(Math.random()*0.20)-0.10;
@@ -319,6 +321,20 @@ addEventListener('DOMContentLoaded', () => {
   }
   let TILES=buildTiles(PATH.length);
 
+  // === 幫助計算：地產總價值（房價×等級） ===
+  function propertyValueForPlayer(playerIndex){
+    let total=0;
+    TILES.forEach(t=>{
+      if(t.type==='property' && t.ownerIndex===playerIndex){
+        total += (t.price||0) * (t.level||1);
+      }
+    });
+    return total;
+  }
+  function netWorthOf(player, playerIndex){
+    return (player.balance||0) + propertyValueForPlayer(playerIndex);
+  }
+
   // === UI：角色頭像 ===
   function buildAvatars(){
     avatarsEl.innerHTML='';
@@ -381,7 +397,7 @@ addEventListener('DOMContentLoaded', () => {
     }
 
     // 玩家標記 + 名稱
-    players.forEach(pl=>{
+    players.forEach((pl,idx)=>{
       const wrap=document.getElementById('tile-'+(pl.pos||0));
       if(wrap){
         const pill=document.createElement('span'); pill.className='pill';
@@ -405,10 +421,11 @@ addEventListener('DOMContentLoaded', () => {
     balanceEl.textContent=money(p?.balance??0);
 
     if(p){
-      // 簡短持股摘要：持有非零的幾檔
+      networthEl.textContent = money(netWorthOf(p, currentIndex));
       const held = Object.entries(p.stocks).filter(([sym,qty])=>qty>0).slice(0,4).map(([sym,qty])=>`${sym}:${qty}`).join('，');
       stockSummaryEl.textContent = held || '—';
     }else{
+      networthEl.textContent = '0';
       stockSummaryEl.textContent = '—';
     }
 
@@ -422,10 +439,14 @@ addEventListener('DOMContentLoaded', () => {
         ledgerEl.appendChild(li);
       });
     }
-    // 排行
+    // 排行（依資產淨值排序）
     leaderboardEl.innerHTML='';
-    [...players].sort((a,b)=>b.balance-a.balance).forEach(pp=>{
-      const li=document.createElement('li'); li.textContent=`${pp.name}：${money(pp.balance)}`; leaderboardEl.appendChild(li);
+    const ranked = players.map((pp,idx)=>({ pp, idx, nw: netWorthOf(pp, idx) })).sort((a,b)=>b.nw-a.nw);
+    ranked.forEach(r=>{
+      const pv = propertyValueForPlayer(r.idx);
+      const li=document.createElement('li'); 
+      li.textContent=`${r.pp.name}：資產淨值 ${money(r.nw)}（餘額 ${money(r.pp.balance)}｜地產 ${money(pv)}）`;
+      leaderboardEl.appendChild(li);
     });
 
     roundNowEl.textContent=roundNow; roundMaxEl.textContent=roundMax;
@@ -467,10 +488,8 @@ addEventListener('DOMContentLoaded', () => {
         title='購物花費'; text='在商店買了需要的東西。'; delta=-cost; p.expense+=cost; p.balance-=cost; break; }
 
       case 'stock': {
-        // 市場波動
-        MARKET.tickAll();
-
-        // 生成下拉清單
+        // 這裡不再 tick 市場（已在回合開始時 tickAll）
+        // 產生下拉清單
         stockSelectEl.innerHTML='';
         MARKET.list.forEach(s=>{
           const opt=document.createElement('option');
@@ -478,16 +497,20 @@ addEventListener('DOMContentLoaded', () => {
           stockSelectEl.appendChild(opt);
         });
 
+        // 自動推薦一檔並預選
+        const pickIndex = Math.floor(Math.random()*MARKET.list.length);
+        stockSelectEl.selectedIndex = pickIndex;
+
         const updatePriceUI = () => {
           const sym = stockSelectEl.value;
           const px = MARKET.price[sym];
           stockPriceEl.textContent = '$ ' + money(px);
           stockQtyEl.value = 1;
+          cardTextEl.innerHTML = `推薦標的：<b>${sym}</b>（可改選），目前市價 $ ${money(px)}。`;
         };
         updatePriceUI();
 
         title=`股票：選擇標的`;
-        text='選擇一檔股票進行買入或賣出。';
         delta=0;
         stockActionsEl.style.display='flex';
 
@@ -607,29 +630,45 @@ addEventListener('DOMContentLoaded', () => {
     renderStats();
   }
 
+  function endGameByRounds(){
+    // 依資產淨值決勝（餘額 + 地產價值），不把股票未實現市值計入（依你的需求）
+    const ranked = players.map((pp,idx)=>({ pp, idx, nw: netWorthOf(pp, idx) })).sort((a,b)=>b.nw-a.nw);
+    const top = ranked[0];
+    const pv = propertyValueForPlayer(top.idx);
+    alert(`⏱️ 達到 ${roundMax} 回合，${top.pp.name} 以資產淨值 ${money(top.nw)} 元獲勝！（餘額 ${money(top.pp.balance)}｜地產 ${money(pv)}）`);
+    gameOver=true;
+  }
+
   function advanceTurn(){
     cardEl.style.display='none'; if(!players.length || gameOver) return;
     currentIndex = (currentIndex + 1) % players.length;
     if(currentIndex===0){
       roundNow+=1;
       if(roundNow>roundMax){
-        const top=[...players].sort((a,b)=>b.balance-a.balance)[0];
-        alert(`⏱️ 達到 ${roundMax} 回合，${top.name} 以 $${money(top.balance)} 獲勝！`);
-        gameOver=true; return;
+        endGameByRounds();
+        return;
       }
     }
     renderStats(); resultEl.textContent='';
   }
 
-  // 擲骰
+  // 擲骰（每回合開始→市場自動波動）
   diceEl.addEventListener('click',()=>{
     if(gameOver){ return; }
     if(!players.length){ alert('請先加入玩家'); return; }
+
+    // ★ 每回合自動全市場微幅波動（不需到股票格）
+    MARKET.tickAll();
+
     const p=players[currentIndex];
     const roll=Math.floor(Math.random()*6)+1; resultEl.textContent=`你擲出了：${roll}`;
     p.pos = ((p.pos||0)+roll) % PATH.length; renderBoard();
     applyTileEffect(p, roll);
-    if(winTarget>0 && p.balance>=winTarget){ alert(`🎉 恭喜 ${p.name} 達到 $${money(winTarget)}，獲勝！`); gameOver=true; }
+    // 勝利條件仍以「餘額達標」為主（如需改為淨值達標可告訴我）
+    if(winTarget>0 && p.balance>=winTarget){ 
+      alert(`🎉 恭喜 ${p.name} 餘額達到 $${money(winTarget)}，獲勝！`); 
+      gameOver=true; 
+    }
   });
 
   okBtn.addEventListener('click', advanceTurn);
